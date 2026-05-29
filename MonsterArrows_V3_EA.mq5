@@ -15,6 +15,7 @@
 
 //=== TRADING SETTINGS ===
 input group "=== TRADING SETTINGS ==="
+input ulong            MagicNumber = 20260529;                // EA Magic Number (unique identifier)
 input string           TradeSymbol = "";                      // Trade symbol (empty = current)
 input ENUM_TIMEFRAMES  TradeTimeframe = PERIOD_H1;            // Trading timeframe
 input bool             EnableTrading = false;                 // Enable live trading
@@ -151,7 +152,7 @@ int OnInit()
    }
 
    // ===== STEP 2: Initialize Trade Object =====
-   trade.SetExpertMagicNumber(20260529);  // Unique magic number
+   trade.SetExpertMagicNumber(MagicNumber);  // Use configurable magic number
    trade.SetDeviationInPoints(10);
    trade.SetAsyncMode(false);
 
@@ -434,6 +435,52 @@ double GetATRValue()
 }
 
 //+------------------------------------------------------------------+
+//| Log To File (REFACTORED)
+//| Centralized file logging for all events
+//| Handles file creation, appending, and error management
+//+------------------------------------------------------------------+
+void LogToFile(string message)
+{
+   if(!EnableLogging)
+      return;
+   
+   // Create log file name with date
+   string logFile = LogFileName;
+   
+   // Open file for append
+   int handle = FileOpen(logFile, FILE_READ | FILE_WRITE | FILE_TXT);
+   
+   if(handle == INVALID_HANDLE)
+   {
+      // File doesn't exist, create it
+      handle = FileOpen(logFile, FILE_WRITE | FILE_TXT);
+      if(handle == INVALID_HANDLE)
+      {
+         Print("ERROR: Cannot create log file: ", logFile);
+         return;
+      }
+      
+      // Write header
+      FileWrite(handle, "=== MonsterArrows V3 EA Log ===");
+      FileWrite(handle, "Started: " + TimeToString(TimeCurrent(), TIME_DATE | TIME_SECONDS));
+      FileWrite(handle, "Symbol: " + _Symbol);
+      FileWrite(handle, "Timeframe: " + IntegerToString(_Period));
+      FileWrite(handle, "Magic Number: " + IntegerToString(MagicNumber));
+      FileWrite(handle, "");
+   }
+   
+   // Seek to end of file
+   FileSeek(handle, 0, SEEK_END);
+   
+   // Write message with timestamp
+   string logMessage = TimeToString(TimeCurrent(), TIME_DATE | TIME_SECONDS) + " | " + message;
+   FileWrite(handle, logMessage);
+   
+   // Close file
+   FileClose(handle);
+}
+
+//+------------------------------------------------------------------+
 //| Handle Errors
 //| Centralized error logging and reporting
 //| Logs to file, prints to terminal, and optionally sends alerts
@@ -456,16 +503,7 @@ void HandleErrors(string errorMessage)
    Print(fullMessage);
 
    // Log to file if enabled
-   if(EnableLogging)
-   {
-      int handle = FileOpen(LogFileName, FILE_READ | FILE_WRITE | FILE_TXT);
-      if(handle != INVALID_HANDLE)
-      {
-         FileSeek(handle, 0, SEEK_END);
-         FileWrite(handle, fullMessage);
-         FileClose(handle);
-      }
-   }
+   LogToFile(fullMessage);
 
    // Send alert if enabled (only for critical errors)
    if(MasterAlert && (errorCode != 0 || StringFind(errorMessage, "Risk limits") >= 0))
@@ -882,7 +920,7 @@ void ManageTrailingStop()
       // Filter: only our symbol and magic number
       if(posInfo.Symbol() != _Symbol)
          continue;
-      if(posInfo.Magic() != 20260529)
+      if(posInfo.Magic() != MagicNumber)
          continue;
       
       // Get position data
@@ -1644,7 +1682,7 @@ void CheckTradeStatus()
       // Filter: only our symbol and magic number
       if(posInfo.Symbol() != _Symbol)
          continue;
-      if(posInfo.Magic() != 20260529)  // Our EA's magic number
+      if(posInfo.Magic() != MagicNumber)  // Our EA's magic number
          continue;
       
       // Now we have actual position data from broker
@@ -1713,7 +1751,7 @@ bool CloseTrade(int tradeIndex, string reason)
                       SymbolInfoDouble(_Symbol, SYMBOL_BID) : 
                       SymbolInfoDouble(_Symbol, SYMBOL_ASK);
       request.deviation = 10;
-      request.magic = 20260529;
+         request.magic = MagicNumber;
       request.comment = "MonsterArrows V3 EA - " + reason;
       
       // Send close order

@@ -526,11 +526,19 @@ void HandleErrors(string errorMessage)
 //+------------------------------------------------------------------+
 int DetectSignal(int rates_total)
 {
-   // Ensure we have enough bars
+   // ===== SIGNAL DETECTION ALGORITHM =====
+   // This function implements Smart Money Concepts (SMC) signal detection:
+   // 1. Liquidity Sweep (LS) - Price breaks pivot, then reverses
+   // 2. Fair Value Gap (FVG) - Imbalance between candles
+   // 3. Local Pivot Confirmation - 3-bar low/high validation
+   // 4. HTF Bias Filter - Higher timeframe trend confirmation
+   // Returns: 1=BUY signal, -1=SELL signal, 0=NO SIGNAL
+   
+   // Ensure we have enough bars for analysis
    if(rates_total < ZZDepth + BarsToConfirm + 10)
       return 0;
 
-   // Get price arrays
+   // ===== STEP 1: Get Price Data =====
    double close[], open[], high[], low[];
    ArraySetAsSeries(close, true);
    ArraySetAsSeries(open, true);
@@ -543,43 +551,52 @@ int DetectSignal(int rates_total)
       CopyLow(_Symbol, TradeTimeframe, 0, rates_total, low) <= 0)
       return 0;
 
-   // Get ATR
+   // ===== STEP 2: Get ATR for volatility measurement =====
    double atr[];
    ArraySetAsSeries(atr, true);
    if(CopyBuffer(hATR, 0, 0, rates_total, atr) <= 0)
       return 0;
 
-   double curATR = atr[1];  // Previous bar ATR (avoid current bar noise)
+   // Use previous bar ATR to avoid current bar noise
+   double curATR = atr[1];  // Previous bar ATR
    if(curATR <= 0)
-      curATR = atr[2];
+      curATR = atr[2];  // Fallback to 2 bars ago
    if(curATR <= 0)
       return 0;
 
-   // Check HTF bias filters
+   // ===== STEP 3: Check Higher Timeframe Bias =====
+   // HTF bias helps filter false signals in lower timeframes
    bool htfBull = false, htfBear = false;
    if(EnableHTFFilter)
       CheckHTFBias(htfBull, htfBear);
 
-   // Analyze previous bar (bar 1, since bar 0 is current/forming)
+   // ===== STEP 4: Analyze Previous Bar (bar 1) =====
+   // We analyze bar 1 (not current bar 0) to avoid repaint
    int barIdx = 1;
    if(barIdx < ZZDepth + 2)
       return 0;
 
-   // Find pivots for liquidity sweep detection
+   // ===== STEP 5: Find Pivot Points =====
+   // Pivots are used to detect liquidity sweep (stop hunt)
    double pivotLow = 0, pivotHigh = 0;
    FindPivots(low, high, barIdx, pivotLow, pivotHigh);
 
-   // Check liquidity sweep (stop hunt)
+   // ===== STEP 6: Check Liquidity Sweep (Stop Hunt) =====
+   // LS occurs when price breaks a pivot, then reverses
+   // This indicates smart money taking out stops
    bool lsBuy = false, lsSell = false;
    if(UseLiquiditySweep)
       CheckLiquiditySweep(low, high, close, barIdx, pivotLow, pivotHigh, lsBuy, lsSell);
 
-   // Check Fair Value Gap
+   // ===== STEP 7: Check Fair Value Gap (FVG) =====
+   // FVG is an imbalance between candles (gap in price)
+   // Indicates potential reversal point
    bool fvgBuy = false, fvgSell = false;
    if(UseFairValueGap && barIdx >= 2)
       CheckFairValueGap(low, high, open, close, barIdx, curATR, fvgBuy, fvgSell);
 
-   // Local pivot check (3-bar confirmation)
+   // ===== STEP 8: Validate Local Pivot (3-bar confirmation) =====
+   // Ensures the pivot is a true local extremum
    bool isLocalLow = true, isLocalHigh = true;
    int chk = MathMin(3, MathMin(barIdx, rates_total - 1 - barIdx));
    for(int k = 1; k <= chk; k++)
@@ -590,11 +607,14 @@ int DetectSignal(int rates_total)
          isLocalHigh = false;
    }
 
-   // Combine conditions
+   // ===== STEP 9: Combine Signal Conditions =====
+   // BUY: (Liquidity Sweep OR FVG) + Local Low + Bullish Candle
+   // SELL: (Liquidity Sweep OR FVG) + Local High + Bearish Candle
    bool buySignal = (lsBuy || fvgBuy) && isLocalLow && close[barIdx] > open[barIdx];
    bool sellSignal = (lsSell || fvgSell) && isLocalHigh && close[barIdx] < open[barIdx];
 
-   // Apply HTF filter
+   // ===== STEP 10: Apply Higher Timeframe Filter =====
+   // HTF filter prevents trading against the higher timeframe trend
    if(EnableHTFFilter)
    {
       if(RequireBothHTF)

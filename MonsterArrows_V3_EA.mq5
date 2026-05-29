@@ -872,66 +872,72 @@ void CheckHTFBias(bool &outHTFBull, bool &outHTFBear)
 //+------------------------------------------------------------------+
 void ManageTrailingStop()
 {
-   for(int i = 0; i < PositionsTotal(); i++)
+   // ===== REFACTORED: Use CPositionInfo for proper position management =====
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
-      if(PositionGetSymbol(i) != _Symbol)
-         continue;
-      if(PositionGetInteger(POSITION_MAGIC) != 20260529)
+      // Select position by index
+      if(!posInfo.SelectByIndex(i))
          continue;
       
-      ulong ticket = PositionGetInteger(POSITION_TICKET);
-      double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
-      double currentSL = PositionGetDouble(POSITION_SL);
-      double volume = PositionGetDouble(POSITION_VOLUME);
-      ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+      // Filter: only our symbol and magic number
+      if(posInfo.Symbol() != _Symbol)
+         continue;
+      if(posInfo.Magic() != 20260529)
+         continue;
       
-      double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-      double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-      double price = (posType == POSITION_TYPE_BUY) ? bid : ask;
+      // Get position data
+      ulong ticket = posInfo.Ticket();
+      double openPrice = posInfo.PriceOpen();
+      double currentPrice = posInfo.PriceCurrent();
+      double currentSL = posInfo.StopLoss();
+      double currentTP = posInfo.TakeProfit();
+      ENUM_POSITION_TYPE posType = posInfo.PositionType();
       
       double trailDistance = TrailingStopPoints * _Point;
       double newSL = 0;
       bool shouldModify = false;
       
+      // Calculate new SL for BUY positions
       if(posType == POSITION_TYPE_BUY)
       {
-         double profit = price - openPrice;
+         double profit = currentPrice - openPrice;
          if(profit > trailDistance)
          {
-            newSL = price - trailDistance;
-            if(newSL > currentSL || currentSL == 0)
+            newSL = currentPrice - trailDistance;
+            // Only modify if new SL is better (higher) than current
+            if(newSL > currentSL)
                shouldModify = true;
          }
       }
-      else // SELL
+      // Calculate new SL for SELL positions
+      else if(posType == POSITION_TYPE_SELL)
       {
-         double profit = openPrice - price;
+         double profit = openPrice - currentPrice;
          if(profit > trailDistance)
          {
-            newSL = price + trailDistance;
-            if(newSL < currentSL || currentSL == 0)
+            newSL = currentPrice + trailDistance;
+            // Only modify if new SL is better (lower) than current
+            if(newSL < currentSL)
                shouldModify = true;
          }
       }
       
+      // Modify position if needed
       if(shouldModify && newSL > 0)
       {
-         MqlTradeRequest request = {};
-         MqlTradeResult result = {};
-         
-         request.action = TRADE_ACTION_SLTP;
-         request.symbol = _Symbol;
-         request.sl = newSL;
-         request.tp = 0;  // Don't modify TP
-         request.position = ticket;
-         request.volume = volume;
-         request.deviation = 10;
-         request.magic = 20260529;
-         request.comment = "Trailing Stop";
-         
-         if(OrderSend(request, result))
+         // ===== Use CTrade with error handling =====
+         if(!trade.PositionModify(ticket, newSL, currentTP))
          {
-            Print("Trailing stop updated for ticket ", ticket, " to ", DoubleToString(newSL, _Digits));
+            uint retcode = trade.ResultRetcode();
+            Print("⚠️  WARNING: Failed to modify trailing stop for position ", ticket);
+            Print("  Retcode: ", retcode);
+            Print("  Reason: ", trade.ResultRetcodeDescription());
+         }
+         else
+         {
+            Print("✅ Trailing stop updated for position ", ticket);
+            Print("  Old SL: ", currentSL);
+            Print("  New SL: ", newSL);
          }
       }
    }

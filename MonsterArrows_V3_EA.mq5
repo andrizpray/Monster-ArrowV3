@@ -234,7 +234,11 @@ void OnTick()
 
    // ===== STEP 5: Monitor Existing Trades =====
    CheckTradeStatus();
-
+   
+   // ===== STEP 5b: Trailing Stop =====
+   if(UseTrailingStop)
+      ManageTrailingStop();
+   
    // ===== STEP 6: Detect New Signal =====
    int signal = DetectSignal(rates_total);
    
@@ -263,7 +267,17 @@ void OnTick()
       }
    }
 
-   // ===== STEP 8: Open New Trade =====
+   // ===== STEP 8: Validate Risk Before Opening =====
+   // Calculate potential loss: ATR * SL_mult * contract_value_per_point
+   double riskPerPoint = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_CONTRACT_SIZE) * SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE) / SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+   double potentialLoss = atr * SL_ATR_Mult * riskPerPoint;
+   if(potentialLoss > 0 && !ValidateRiskLimits(potentialLoss))
+   {
+      HandleErrors("Risk limit validation failed");
+      return;
+   }
+   
+   // ===== STEP 9: Open New Trade =====
    if(OpenTrade(signal, atr))
    {
       // Trade opened successfully - record signal bar time
@@ -783,14 +797,74 @@ void CheckHTFBias(bool &outHTFBull, bool &outHTFBear)
 }
 
 //+------------------------------------------------------------------+
-//| Helper: Calculate RMA (Recursive Moving Average)
-//| Used for SuperTrend dual filter on HTF
+//| Trailing Stop Manager
+//| Moves SL in profit direction when price moves favorably
 //+------------------------------------------------------------------+
-double CalculateRMA(double prevRMA, double currentValue, int period)
+void ManageTrailingStop()
 {
-   if(prevRMA == 0)
-      return currentValue;
-   return (prevRMA * (period - 1) + currentValue) / period;
+   for(int i = 0; i < PositionsTotal(); i++)
+   {
+      if(PositionGetSymbol(i) != _Symbol)
+         continue;
+      if(PositionGetInteger(POSITION_MAGIC) != 20260529)
+         continue;
+      
+      ulong ticket = PositionGetInteger(POSITION_TICKET);
+      double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+      double currentSL = PositionGetDouble(POSITION_SL);
+      double volume = PositionGetDouble(POSITION_VOLUME);
+      ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+      
+      double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+      double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+      double price = (posType == POSITION_TYPE_BUY) ? bid : ask;
+      
+      double trailDistance = TrailingStopPoints * _Point;
+      double newSL = 0;
+      bool shouldModify = false;
+      
+      if(posType == POSITION_TYPE_BUY)
+      {
+         double profit = price - openPrice;
+         if(profit > trailDistance)
+         {
+            newSL = price - trailDistance;
+            if(newSL > currentSL || currentSL == 0)
+               shouldModify = true;
+         }
+      }
+      else // SELL
+      {
+         double profit = openPrice - price;
+         if(profit > trailDistance)
+         {
+            newSL = price + trailDistance;
+            if(newSL < currentSL || currentSL == 0)
+               shouldModify = true;
+         }
+      }
+      
+      if(shouldModify && newSL > 0)
+      {
+         MqlTradeRequest request = {};
+         MqlTradeResult result = {};
+         
+         request.action = TRADE_ACTION_SLTP;
+         request.symbol = _Symbol;
+         request.sl = newSL;
+         request.tp = 0;  // Don't modify TP
+         request.position = ticket;
+         request.volume = volume;
+         request.deviation = 10;
+         request.magic = 20260529;
+         request.comment = "Trailing Stop";
+         
+         if(OrderSend(request, result))
+         {
+            Print("Trailing stop updated for ticket ", ticket, " to ", DoubleToString(newSL, _Digits));
+         }
+      }
+   }
 }
 
 //+------------------------------------------------------------------+

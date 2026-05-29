@@ -19,8 +19,10 @@ input ENUM_SYMBOLS_MODE SymbolMode = SYMBOLS_CURRENCY_BASE;  // Symbol selection
 input string           TradeSymbol = "";                      // Trade symbol (empty = current)
 input ENUM_TIMEFRAMES  TradeTimeframe = PERIOD_H1;            // Trading timeframe
 input bool             EnableTrading = false;                 // Enable live trading
+input bool             OnlyOneTrade = false;                  // Only 1 trade per signal bar
 input int              MaxOpenTrades = 3;                     // Maximum concurrent trades
 input int              MaxTradesPerDay = 10;                  // Max trades per calendar day
+input int              TradeExpiry = 0;                       // Trade expiry (minutes, 0=no expiry)
 
 //=== SIGNAL SETTINGS ===
 input group "=== SIGNAL SETTINGS ==="
@@ -47,6 +49,8 @@ input group "=== MONEY MANAGEMENT ==="
 input double RiskPercent         = 1.0;    // Risk per trade (% of account)
 input double FixedLotSize        = 0.0;    // Fixed lot size (0 = use risk %)
 input double MaxLotSize          = 10.0;   // Maximum lot size
+input double MaxDailyLoss        = 5.0;    // Max daily loss (% of account)
+input double MaxDrawdown         = 10.0;   // Max drawdown (% of account)
 input double TP1_ATR_Mult        = 1.5;    // TP1 distance (ATR multiplier)
 input double TP2_ATR_Mult        = 3.0;    // TP2 distance (ATR multiplier)
 input double TP3_ATR_Mult        = 6.0;    // TP3 distance (ATR multiplier)
@@ -115,6 +119,7 @@ double g_ST_trendDir    = 1.0;   // last known SuperTrend direction on HTF
 // State
 datetime g_LastAlert = 0;
 int      g_LastProcessedBar = -1;
+datetime g_LastSignalBar = 0;  // Track last signal bar to prevent duplicate trades
 
 //+------------------------------------------------------------------+
 //| EXPERT INITIALIZATION
@@ -899,9 +904,9 @@ double CalculateLotSize(double atr)
    
    double riskAmount = balance * (RiskPercent / 100.0);
    
-   // SL distance in points
-   double slDistance = atr * SL_ATR_Mult;
-   if(slDistance <= 0)
+   // SL distance in points (convert from price distance to points)
+   double slDistancePoints = (atr * SL_ATR_Mult) / _Point;
+   if(slDistancePoints <= 0)
    {
       Print("ERROR: Invalid SL distance");
       return 0;
@@ -909,18 +914,19 @@ double CalculateLotSize(double atr)
    
    // Get symbol info
    double tickValue = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
+   double tickSize = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
    double minLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
    double maxLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
    double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
    
-   if(tickValue <= 0 || minLot <= 0 || lotStep <= 0)
+   if(tickValue <= 0 || tickSize <= 0 || minLot <= 0 || lotStep <= 0)
    {
       Print("ERROR: Invalid symbol parameters");
       return 0;
    }
    
-   // Lot size = risk amount / (SL distance in points * tick value)
-   double lot = riskAmount / (slDistance * tickValue);
+   // Lot size = risk amount / (SL distance in points * tick value / tick size)
+   double lot = riskAmount / (slDistancePoints * tickValue / tickSize);
    
    // Normalize to symbol's lot step
    lot = MathFloor(lot / lotStep) * lotStep;
@@ -1238,7 +1244,7 @@ void UpdateDailyStats()
       g_DailyStats.totalPnL = 0;
       g_DailyStats.maxDrawdown = 0;
       
-      Print(\"Daily stats reset. New day started at \", TimeToString(todayStart));
+      Print("Daily stats reset. New day started at ", TimeToString(todayStart));
    }
    
    // Update equity tracking
@@ -1287,7 +1293,7 @@ bool IsRiskLimitOK()
    {
       Print(\"WARNING: Drawdown limit exceeded. Drawdown: \", 
             DoubleToString(g_DailyStats.maxDrawdown, 2), \"% / Limit: \", 
-            DoubleToString(MaxDrawdown, 2), \"%\");
+            DoubleToString(MaxDrawdown, 2), "%");
       return false;
    }
    
@@ -1395,12 +1401,16 @@ void CheckTradeStatus()
    {
       if(ShouldCloseTrade(i))
       {
-         // Remove from active trades array
-         for(int j = i; j < totalActiveTrades - 1; j++)
+         // Get reason for closing
+         string reason = "Auto-close";
+         if(!PositionSelectByTicket(activeTrades[i].ticket))
+            reason = "Position not found";
+         
+         // Close the trade
+         if(!CloseTrade(i, reason))
          {
-            activeTrades[j] = activeTrades[j + 1];
+            Print("ERROR: Failed to close trade at index ", i);
          }
-         totalActiveTrades--;
       }
    }
 }
@@ -1414,69 +1424,76 @@ bool CloseTrade(int tradeIndex, string reason)
 {
    if(tradeIndex < 0 || tradeIndex >= totalActiveTrades)
    {
-      Print(\"ERROR: Invalid trade index \", tradeIndex);
+      Print("ERROR: Invalid trade index ", tradeIndex);
       return false;
    }
    
    TradeInfo &trade = activeTrades[tradeIndex];
    
-   // Verify position exists
+   // Check if position still exists
    if(!PositionSelectByTicket(trade.ticket))
    {
-      Print(\"ERROR: Position ticket \", trade.ticket, \" not found\");
-      return false;
+      Print("Trade ticket ", trade.ticket, " already closed - removing from tracking");
+      reason = "Already closed";
+      // Fall through to remove from array
    }
-   
-   // Get current position details
-   double volume = PositionGetDouble(POSITION_VOLUME);
-   ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
-   
-   // Prepare close request
-   MqlTradeRequest request = {};
-   MqlTradeResult result = {};
-   
-   request.action = TRADE_ACTION_DEAL;
-   request.symbol = _Symbol;
-   request.volume = volume;
-   request.type = (posType == POSITION_TYPE_BUY) ? ORDER_TYPE_SELL : ORDER_TYPE_BUY;
-   request.price = (posType == POSITION_TYPE_BUY) ? 
-                   SymbolInfoDouble(_Symbol, SYMBOL_BID) : 
-                   SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-   request.deviation = 10;
-   request.magic = 20260529;
-   request.comment = \"MonsterArrows V3 EA - \" + reason;
-   
-   // Send close order
-   if(!OrderSend(request, result))
-   {
-      Print(\"ERROR: Failed to close trade. Code: \", GetLastError(), 
-            \" Retcode: \", result.retcode);
-      return false;
-   }
-   
-   // Verify close was accepted
-   if(result.retcode != TRADE_RETCODE_DONE && result.retcode != TRADE_RETCODE_DONE_PARTIAL)
-   {
-      Print(\"ERROR: Close order rejected. Retcode: \", result.retcode);
-      return false;
-   }
-   
-   // Calculate close P&L
-   double closePrice = request.price;
-   double pnl = 0;
-   if(trade.isBuy)
-      pnl = (closePrice - trade.entryPrice) * volume * SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
    else
-      pnl = (trade.entryPrice - closePrice) * volume * SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
-   
-   // Log trade closure
-   LogTrade(\"CLOSE\", trade.isBuy ? 1 : -1, closePrice, 0, 0, volume);
-   
-   // Send alert
-   SendAlert((trade.isBuy ? \"BUY\" : \"SELL\") + 
-            \" closed @ \" + DoubleToString(closePrice, _Digits) +
-            \" | Reason: \" + reason +
-            \" | P&L: \" + DoubleToString(pnl, 2));
+   {
+      // Get current position details
+      double volume = PositionGetDouble(POSITION_VOLUME);
+      ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+      
+      // Prepare close request
+      MqlTradeRequest request = {};
+      MqlTradeResult result = {};
+      
+      request.action = TRADE_ACTION_DEAL;
+      request.symbol = _Symbol;
+      request.volume = volume;
+      request.type = (posType == POSITION_TYPE_BUY) ? ORDER_TYPE_SELL : ORDER_TYPE_BUY;
+      request.price = (posType == POSITION_TYPE_BUY) ? 
+                      SymbolInfoDouble(_Symbol, SYMBOL_BID) : 
+                      SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+      request.deviation = 10;
+      request.magic = 20260529;
+      request.comment = "MonsterArrows V3 EA - " + reason;
+      
+      // Send close order
+      if(!OrderSend(request, result))
+      {
+         Print("ERROR: Failed to close trade. Code: ", GetLastError(), 
+               " Retcode: ", result.retcode);
+         return false;
+      }
+      
+      // Verify close was accepted
+      if(result.retcode != TRADE_RETCODE_DONE && result.retcode != TRADE_RETCODE_DONE_PARTIAL)
+      {
+         Print("ERROR: Close order rejected. Retcode: ", result.retcode);
+         return false;
+      }
+      
+      // Calculate close P&L
+      double closePrice = request.price;
+      double pnl = 0;
+      double contractSize = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_CONTRACT_SIZE);
+      double tickValue = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
+      double tickSize = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+      
+      if(trade.isBuy)
+         pnl = (closePrice - trade.entryPrice) * volume * contractSize * tickValue / tickSize;
+      else
+         pnl = (trade.entryPrice - closePrice) * volume * contractSize * tickValue / tickSize;
+      
+      // Log trade closure
+      LogTrade("CLOSE", trade.isBuy ? 1 : -1, closePrice, 0, 0, volume);
+      
+      // Send alert
+      SendAlert((trade.isBuy ? "BUY" : "SELL") + 
+               " closed @ " + DoubleToString(closePrice, _Digits) +
+               " | Reason: " + reason +
+               " | P&L: " + DoubleToString(pnl, 2));
+   }
    
    // Remove from active trades array
    for(int j = tradeIndex; j < totalActiveTrades - 1; j++)

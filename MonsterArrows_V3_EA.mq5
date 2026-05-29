@@ -15,7 +15,6 @@
 
 //=== TRADING SETTINGS ===
 input group "=== TRADING SETTINGS ==="
-input ENUM_SYMBOLS_MODE SymbolMode = SYMBOLS_CURRENCY_BASE;  // Symbol selection mode
 input string           TradeSymbol = "";                      // Trade symbol (empty = current)
 input ENUM_TIMEFRAMES  TradeTimeframe = PERIOD_H1;            // Trading timeframe
 input bool             EnableTrading = false;                 // Enable live trading
@@ -670,8 +669,10 @@ void CheckHTFBias(bool &outHTFBull, bool &outHTFBear)
 
    // --- Filter 1: HTF 20 EMA ---
    {
-      double emaBuf[3];
-      double htfClose[3];
+      double emaBuf[];
+      double htfClose[];
+      ArrayResize(emaBuf, 3);
+      ArrayResize(htfClose, 3);
       ArraySetAsSeries(emaBuf, true);
       ArraySetAsSeries(htfClose, true);
 
@@ -1069,9 +1070,8 @@ bool ValidateOrderEntry(int signal, double lot, double entryPrice, double sl)
    }
    
    // Check available margin
-   double requiredMargin = trade.CalcMargin(signal == 1 ? ORDER_TYPE_BUY : ORDER_TYPE_SELL, 
-                                           _Symbol, lot, entryPrice);
-   double freeMargin = AccountInfoDouble(ACCOUNT_FREEMARGIN);
+   double requiredMargin = AccountInfoDouble(ACCOUNT_MARGIN_REQUIRED);
+   double freeMargin = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
    
    if(requiredMargin > freeMargin)
    {
@@ -1356,8 +1356,8 @@ bool IsRiskLimitOK()
    
    if(dailyLoss > maxDailyLoss)
    {
-      Print(\"WARNING: Daily loss limit exceeded. Loss: \", 
-            DoubleToString(dailyLoss, 2), \" / Limit: \", 
+      Print("WARNING: Daily loss limit exceeded. Loss: ", 
+            DoubleToString(dailyLoss, 2), " / Limit: ", 
             DoubleToString(maxDailyLoss, 2));
       return false;
    }
@@ -1365,8 +1365,8 @@ bool IsRiskLimitOK()
    // Check drawdown limit
    if(g_DailyStats.maxDrawdown > MaxDrawdown)
    {
-      Print(\"WARNING: Drawdown limit exceeded. Drawdown: \", 
-            DoubleToString(g_DailyStats.maxDrawdown, 2), \"% / Limit: \", 
+      Print("WARNING: Drawdown limit exceeded. Drawdown: ", 
+            DoubleToString(g_DailyStats.maxDrawdown, 2), "% / Limit: ", 
             DoubleToString(MaxDrawdown, 2), "%");
       return false;
    }
@@ -1387,10 +1387,10 @@ bool ValidateRiskLimits(double potentialLoss)
    
    if(currentDailyLoss + potentialLoss > maxDailyLoss)
    {
-      Print(\"WARNING: Trade would exceed daily loss limit. \",
-            \"Current loss: \", DoubleToString(currentDailyLoss, 2),
-            \" + Potential: \", DoubleToString(potentialLoss, 2),
-            \" > Limit: \", DoubleToString(maxDailyLoss, 2));
+      Print("WARNING: Trade would exceed daily loss limit. ",
+            "Current loss: ", DoubleToString(currentDailyLoss, 2),
+            " + Potential: ", DoubleToString(potentialLoss, 2),
+            " > Limit: ", DoubleToString(maxDailyLoss, 2));
       return false;
    }
    
@@ -1400,9 +1400,9 @@ bool ValidateRiskLimits(double potentialLoss)
    
    if(potentialDrawdown > MaxDrawdown)
    {
-      Print(\"WARNING: Trade would exceed drawdown limit. \",
-            \"Potential drawdown: \", DoubleToString(potentialDrawdown, 2),
-            \"% > Limit: \", DoubleToString(MaxDrawdown, 2), \"%\");
+      Print("WARNING: Trade would exceed drawdown limit. ",
+            "Potential drawdown: ", DoubleToString(potentialDrawdown, 2),
+            "% > Limit: ", DoubleToString(MaxDrawdown, 2), "%");
       return false;
    }
    
@@ -1424,7 +1424,7 @@ bool ShouldCloseTrade(int tradeIndex)
    // Check if position still exists
    if(!PositionSelectByTicket(trade.ticket))
    {
-      Print(\"Trade ticket \", trade.ticket, \" not found - already closed\");
+      Print("Trade ticket ", trade.ticket, " not found - already closed");
       return true;  // Position already closed
    }
    
@@ -1437,7 +1437,7 @@ bool ShouldCloseTrade(int tradeIndex)
       
       if(minutesOpen > TradeExpiry)
       {
-         Print(\"Trade expired after \", minutesOpen, \" minutes (limit: \", TradeExpiry, \")\");
+         Print("Trade expired after ", minutesOpen, " minutes (limit: ", TradeExpiry, ")");
          return true;
       }
    }
@@ -1449,15 +1449,15 @@ bool ShouldCloseTrade(int tradeIndex)
    // SL hit check
    if(trade.isBuy && currentPrice <= trade.stopLoss)
    {
-      Print(\"SL hit for BUY trade. Price: \", DoubleToString(currentPrice, _Digits),
-            \" SL: \", DoubleToString(trade.stopLoss, _Digits));
+      Print("SL hit for BUY trade. Price: ", DoubleToString(currentPrice, _Digits),
+            " SL: ", DoubleToString(trade.stopLoss, _Digits));
       return true;
    }
    
    if(!trade.isBuy && currentPrice >= trade.stopLoss)
    {
-      Print(\"SL hit for SELL trade. Price: \", DoubleToString(currentPrice, _Digits),
-            \" SL: \", DoubleToString(trade.stopLoss, _Digits));
+      Print("SL hit for SELL trade. Price: ", DoubleToString(currentPrice, _Digits),
+            " SL: ", DoubleToString(trade.stopLoss, _Digits));
       return true;
    }
    

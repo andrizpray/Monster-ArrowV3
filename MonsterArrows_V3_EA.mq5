@@ -1206,40 +1206,65 @@ bool OpenTrade(int signal, double atr)
       return false;
    }
    
-   // Prepare trade request
-   MqlTradeRequest request = {};
-   MqlTradeResult result = {};
+   // ===== REFACTORED: Use CTrade class with error handling =====
+   ENUM_ORDER_TYPE orderType = (signal == 1) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
    
-   request.action = TRADE_ACTION_DEAL;
-   request.symbol = _Symbol;
-   request.volume = lot;
-   request.type = (signal == 1) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
-   request.price = entryPrice;
-   request.sl = sl;
-   request.tp = tp1;  // Use TP1 as initial TP (can be modified for multi-level exits)
-   request.deviation = 10;
-   request.magic = 20260529;  // EA magic number
-   request.comment = "MonsterArrows V3 EA";
-   
-   // Send order
-   if(!OrderSend(request, result))
+   // Open position using CTrade
+   if(!trade.PositionOpen(_Symbol, orderType, lot, entryPrice, sl, tp1, "MonsterArrows V3"))
    {
-      Print("ERROR: OrderSend failed. Code: ", GetLastError(), 
-            " Retcode: ", result.retcode);
+      // ===== ERROR HANDLING =====
+      uint retcode = trade.ResultRetcode();
+      Print("❌ ERROR: Failed to open trade");
+      Print("  Type: ", (signal == 1 ? "BUY" : "SELL"));
+      Print("  Lot: ", lot);
+      Print("  Entry: ", entryPrice);
+      Print("  SL: ", sl);
+      Print("  TP: ", tp1);
+      Print("  Retcode: ", retcode);
+      Print("  Reason: ", trade.ResultRetcodeDescription());
+      
+      // Log specific error codes
+      switch(retcode)
+      {
+         case 10015:  // TRADE_RETCODE_INVALID_VOLUME
+            Print("  → Invalid volume/lot size");
+            break;
+         case 10018:  // TRADE_RETCODE_MARKET_CLOSED
+            Print("  → Market is closed");
+            break;
+         case 10019:  // TRADE_RETCODE_NO_MONEY
+            Print("  → Insufficient funds");
+            break;
+         case 10020:  // TRADE_RETCODE_PRICE_CHANGED
+            Print("  → Price changed, retry");
+            break;
+         case 10021:  // TRADE_RETCODE_PRICE_OFF
+            Print("  → Price is off");
+            break;
+         case 10022:  // TRADE_RETCODE_INVALID_STOPS
+            Print("  → Invalid stop loss or take profit");
+            break;
+      }
+      
       return false;
    }
    
-   // Verify order was accepted
-   if(result.retcode != TRADE_RETCODE_DONE && result.retcode != TRADE_RETCODE_DONE_PARTIAL)
-   {
-      Print("ERROR: Order rejected. Retcode: ", result.retcode);
-      return false;
-   }
+   // ===== SUCCESS: Log trade details =====
+   ulong ticket = trade.ResultOrder();
+   Print("✅ Trade opened successfully");
+   Print("  Ticket: ", ticket);
+   Print("  Type: ", (signal == 1 ? "BUY" : "SELL"));
+   Print("  Lot: ", lot);
+   Print("  Entry: ", entryPrice);
+   Print("  SL: ", sl);
+   Print("  TP1: ", tp1);
+   Print("  TP2: ", tp2);
+   Print("  TP3: ", tp3);
    
-   // Store trade info in active trades array
+   // Store trade info in active trades array (for legacy compatibility)
    if(totalActiveTrades < MaxOpenTrades)
    {
-      activeTrades[totalActiveTrades].ticket = result.order;
+      activeTrades[totalActiveTrades].ticket = ticket;
       activeTrades[totalActiveTrades].entryTime = TimeCurrent();
       activeTrades[totalActiveTrades].entryPrice = entryPrice;
       activeTrades[totalActiveTrades].stopLoss = sl;

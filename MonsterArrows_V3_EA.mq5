@@ -1532,25 +1532,111 @@ bool ShouldCloseTrade(int tradeIndex)
 }
 
 //+------------------------------------------------------------------+
+//| Should Close Position (REFACTORED)
+//| Checks if a position should be closed based on various criteria
+//| Uses CPositionInfo for real position data
+//| Returns: true if position should be closed
+//+------------------------------------------------------------------+
+bool ShouldClosePosition(ulong ticket, double currentPrice, double entryPrice, ENUM_POSITION_TYPE posType)
+{
+   // Verify position still exists
+   if(!posInfo.SelectByTicket(ticket))
+   {
+      Print("WARNING: Position ", ticket, " not found");
+      return true;  // Position already closed
+   }
+   
+   // Check trade expiry time
+   if(TradeExpiry > 0)
+   {
+      datetime openTime = posInfo.Time();
+      datetime now = TimeCurrent();
+      int minutesOpen = (int)((now - openTime) / 60);
+      
+      if(minutesOpen > TradeExpiry)
+      {
+         Print("✅ Trade expired after ", minutesOpen, " minutes (limit: ", TradeExpiry, ")");
+         return true;
+      }
+   }
+   
+   // Check if SL or TP has been hit
+   double sl = posInfo.StopLoss();
+   double tp = posInfo.TakeProfit();
+   
+   // SL hit check for BUY
+   if(posType == POSITION_TYPE_BUY && currentPrice <= sl && sl > 0)
+   {
+      Print("✅ SL hit for BUY. Price: ", currentPrice, " SL: ", sl);
+      return true;
+   }
+   
+   // SL hit check for SELL
+   if(posType == POSITION_TYPE_SELL && currentPrice >= sl && sl > 0)
+   {
+      Print("✅ SL hit for SELL. Price: ", currentPrice, " SL: ", sl);
+      return true;
+   }
+   
+   // TP hit check for BUY
+   if(posType == POSITION_TYPE_BUY && currentPrice >= tp && tp > 0)
+   {
+      Print("✅ TP hit for BUY. Price: ", currentPrice, " TP: ", tp);
+      return true;
+   }
+   
+   // TP hit check for SELL
+   if(posType == POSITION_TYPE_SELL && currentPrice <= tp && tp > 0)
+   {
+      Print("✅ TP hit for SELL. Price: ", currentPrice, " TP: ", tp);
+      return true;
+   }
+   
+   return false;
+}
+
+//+------------------------------------------------------------------+
 //| Check Trade Status and Monitor for Closure Conditions
 //| Iterates through all active trades and checks closure conditions
 //| Removes closed trades from active trades array
 //+------------------------------------------------------------------+
 void CheckTradeStatus()
 {
-   for(int i = totalActiveTrades - 1; i >= 0; i--)
+   // ===== REFACTORED: Use CPositionInfo instead of manual array =====
+   // Iterate through all open positions (reverse order for safe deletion)
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
-      if(ShouldCloseTrade(i))
+      // Select position by index
+      if(!posInfo.SelectByIndex(i))
+         continue;
+      
+      // Filter: only our symbol and magic number
+      if(posInfo.Symbol() != _Symbol)
+         continue;
+      if(posInfo.Magic() != 20260529)  // Our EA's magic number
+         continue;
+      
+      // Now we have actual position data from broker
+      ulong ticket = posInfo.Ticket();
+      double currentPrice = posInfo.PriceCurrent();
+      double entryPrice = posInfo.PriceOpen();
+      double sl = posInfo.StopLoss();
+      double tp = posInfo.TakeProfit();
+      ENUM_POSITION_TYPE posType = posInfo.PositionType();
+      
+      // Check if should close this position
+      if(ShouldClosePosition(ticket, currentPrice, entryPrice, posType))
       {
-         // Get reason for closing
-         string reason = "Auto-close";
-         if(!PositionSelectByTicket(activeTrades[i].ticket))
-            reason = "Position not found";
-         
-         // Close the trade
-         if(!CloseTrade(i, reason))
+         // Close the position
+         if(!trade.PositionClose(ticket))
          {
-            Print("ERROR: Failed to close trade at index ", i);
+            Print("ERROR: Failed to close position ", ticket);
+            Print("  Code: ", trade.ResultRetcode());
+            Print("  Reason: ", trade.ResultRetcodeDescription());
+         }
+         else
+         {
+            Print("✅ Position closed: ", ticket);
          }
       }
    }

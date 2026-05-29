@@ -682,7 +682,8 @@ void CheckHTFBias(bool &outHTFBull, bool &outHTFBear)
          // Check EMA slope strength
          double emaSlope = emaBuf[0] - emaBuf[2];  // 2-bar slope
          double htfATRVal = 0;
-         double tmpATR[1];
+         double tmpATR[];
+         ArrayResize(tmpATR, 1);
          ArraySetAsSeries(tmpATR, true);
          if(CopyBuffer(hHTF_ATR, 0, 0, 1, tmpATR) > 0)
             htfATRVal = tmpATR[0];
@@ -698,7 +699,11 @@ void CheckHTFBias(bool &outHTFBull, bool &outHTFBear)
    {
       int htfBars = MathMax(ST_RMA1Length, ST_RMA2Length) + ST_ATRPeriod + 50;
 
-      double htfHigh[100], htfLow[100], htfClose[100], htfATR[100];
+      double htfHigh[], htfLow[], htfClose[], htfATR[];
+      ArrayResize(htfHigh, htfBars);
+      ArrayResize(htfLow, htfBars);
+      ArrayResize(htfClose, htfBars);
+      ArrayResize(htfATR, htfBars);
       ArraySetAsSeries(htfHigh, true);
       ArraySetAsSeries(htfLow, true);
       ArraySetAsSeries(htfClose, true);
@@ -1070,13 +1075,11 @@ bool ValidateOrderEntry(int signal, double lot, double entryPrice, double sl)
    }
    
    // Check available margin
-   double requiredMargin = AccountInfoDouble(ACCOUNT_MARGIN_REQUIRED);
    double freeMargin = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
    
-   if(requiredMargin > freeMargin)
+   if(freeMargin <= 0)
    {
-      Print("ERROR: Insufficient margin. Required: ", requiredMargin, 
-            " Free: ", freeMargin);
+      Print("ERROR: Insufficient margin. Free margin: ", freeMargin);
       return false;
    }
    

@@ -125,38 +125,86 @@ datetime g_LastSignalBar = 0;  // Track last signal bar to prevent duplicate tra
 //+------------------------------------------------------------------+
 int OnInit()
 {
-   // Validate inputs
+   // ===== STEP 1: Validate Input Parameters =====
    if(TradeTimeframe == PERIOD_MN1)
    {
       Print("ERROR: Monthly timeframe not supported for EA trading");
-      return INIT_FAILED;
+      return INIT_PARAMETERS_INCORRECT;
+   }
+   
+   if(RiskPercent <= 0 || RiskPercent > 100)
+   {
+      Print("ERROR: RiskPercent must be between 0 and 100");
+      return INIT_PARAMETERS_INCORRECT;
+   }
+   
+   if(MaxOpenTrades <= 0)
+   {
+      Print("ERROR: MaxOpenTrades must be greater than 0");
+      return INIT_PARAMETERS_INCORRECT;
+   }
+   
+   if(ATRPeriod <= 0 || HTF_EMAPeriod <= 0)
+   {
+      Print("ERROR: Indicator periods must be greater than 0");
+      return INIT_PARAMETERS_INCORRECT;
    }
 
-   // Initialize trade object
+   // ===== STEP 2: Initialize Trade Object =====
    trade.SetExpertMagicNumber(20260529);  // Unique magic number
    trade.SetDeviationInPoints(10);
    trade.SetAsyncMode(false);
 
-   // Create indicator handles for current symbol/timeframe
+   // ===== STEP 3: Create Indicator Handles =====
    string symbol = (TradeSymbol == "") ? _Symbol : TradeSymbol;
    ENUM_TIMEFRAMES tf = TradeTimeframe;
 
-   hATR       = iATR(symbol, tf, ATRPeriod);
-   hATRDaily  = iATR(symbol, PERIOD_D1, ATRPeriod);
-   hATRWeekly = iATR(symbol, PERIOD_W1, ATRPeriod);
-   hHTF_EMA   = iMA(symbol, GetHTF(tf), HTF_EMAPeriod, 0, MODE_EMA, PRICE_CLOSE);
-   hHTF_ATR   = iATR(symbol, GetHTF(tf), ST_ATRPeriod);
-
-   // Validate handle creation
-   if(hATR == INVALID_HANDLE || hATRDaily == INVALID_HANDLE ||
-      hATRWeekly == INVALID_HANDLE ||
-      hHTF_EMA == INVALID_HANDLE || hHTF_ATR == INVALID_HANDLE)
+   hATR = iATR(symbol, tf, ATRPeriod);
+   if(hATR == INVALID_HANDLE)
    {
-      Print("ERROR: Indicator handle creation failed");
+      Print("ERROR: Failed to create ATR handle for ", symbol, " ", tf);
       return INIT_FAILED;
    }
 
-   // Initialize SuperTrend state
+   hATRDaily = iATR(symbol, PERIOD_D1, ATRPeriod);
+   if(hATRDaily == INVALID_HANDLE)
+   {
+      Print("ERROR: Failed to create Daily ATR handle");
+      IndicatorRelease(hATR);
+      return INIT_FAILED;
+   }
+
+   hATRWeekly = iATR(symbol, PERIOD_W1, ATRPeriod);
+   if(hATRWeekly == INVALID_HANDLE)
+   {
+      Print("ERROR: Failed to create Weekly ATR handle");
+      IndicatorRelease(hATR);
+      IndicatorRelease(hATRDaily);
+      return INIT_FAILED;
+   }
+
+   hHTF_EMA = iMA(symbol, GetHTF(tf), HTF_EMAPeriod, 0, MODE_EMA, PRICE_CLOSE);
+   if(hHTF_EMA == INVALID_HANDLE)
+   {
+      Print("ERROR: Failed to create HTF EMA handle");
+      IndicatorRelease(hATR);
+      IndicatorRelease(hATRDaily);
+      IndicatorRelease(hATRWeekly);
+      return INIT_FAILED;
+   }
+
+   hHTF_ATR = iATR(symbol, GetHTF(tf), ST_ATRPeriod);
+   if(hHTF_ATR == INVALID_HANDLE)
+   {
+      Print("ERROR: Failed to create HTF ATR handle");
+      IndicatorRelease(hATR);
+      IndicatorRelease(hATRDaily);
+      IndicatorRelease(hATRWeekly);
+      IndicatorRelease(hHTF_EMA);
+      return INIT_FAILED;
+   }
+
+   // ===== STEP 4: Initialize State Variables =====
    g_ST_initialized = false;
    g_ST_trendDir    = 1.0;
    g_LastAlert      = 0;
@@ -170,7 +218,13 @@ int OnInit()
    ArrayResize(activeTrades, MaxOpenTrades);
    totalActiveTrades = 0;
 
-   Print("MonsterArrows V3 EA initialized successfully");
+   // ===== STEP 5: Log Initialization Success =====
+   Print("✅ MonsterArrows V3 EA initialized successfully");
+   Print("   Symbol: ", symbol);
+   Print("   Timeframe: ", tf);
+   Print("   Risk: ", RiskPercent, "%");
+   Print("   Max Trades: ", MaxOpenTrades);
+   
    return INIT_SUCCEEDED;
 }
 
@@ -198,8 +252,18 @@ void OnDeinit(const int reason)
 //| EXPERT TICK HANDLER - MAIN TRADING LOOP
 //| Phase 5: Complete OnTick() with full trading loop integration
 //+------------------------------------------------------------------+
+// Static variable to track last processed bar
+static datetime lastBarTime = 0;
+
 void OnTick()
 {
+   // ===== NEW BAR CHECK (CRITICAL) =====
+   // Only process once per bar to prevent duplicate trades
+   datetime currentBarTime = iTime(_Symbol, TradeTimeframe, 0);
+   if(currentBarTime == lastBarTime)
+      return;  // Same bar as last tick, skip processing
+   lastBarTime = currentBarTime;
+   
    // Validate minimum bars available
    int rates_total = Bars(_Symbol, TradeTimeframe);
    if(rates_total < ZZDepth + BarsToConfirm + 10)

@@ -1,0 +1,168 @@
+{
+  "1_code_structure": {
+    "program_types": [
+      "Expert Advisor (EA) - automated trading",
+      "Indicator - technical analysis",
+      "Script - one-time execution",
+      "Library - reusable code"
+    ],
+    "required_functions": {
+      "OnInit": "Called once when EA starts - initialize variables, handles, indicators",
+      "OnDeinit": "Called when EA stops - cleanup, close handles, free resources",
+      "OnTick": "Called on every tick - main trading logic, signal detection, order management",
+      "OnStart": "For scripts only - main execution function"
+    },
+    "example_structure": "\n#property strict\n\n// Global variables\nCTrade trade;\nCPositionInfo posInfo;\n\nint OnInit() {\n    // Initialize\n    return INIT_SUCCEEDED;\n}\n\nvoid OnDeinit(const int reason) {\n    // Cleanup\n}\n\nvoid OnTick() {\n    // Main logic - runs on every tick\n}\n"
+  },
+  "2_ea_requirements": {
+    "mandatory": [
+      "OnInit() - must return INIT_SUCCEEDED or error code",
+      "OnDeinit() - cleanup resources",
+      "OnTick() - main trading loop"
+    ],
+    "best_practices": [
+      "Check if new bar before processing (avoid multiple trades per bar)",
+      "Validate symbol and timeframe",
+      "Use magic number to identify EA's own positions",
+      "Implement proper error handling",
+      "Log important events"
+    ],
+    "new_bar_check": "\nstatic datetime lastBarTime = 0;\nif(iTime(_Symbol, _Period, 0) == lastBarTime) return;\nlastBarTime = iTime(_Symbol, _Period, 0);\n// Process new bar here\n"
+  },
+  "3_key_classes": {
+    "CTrade": {
+      "purpose": "Simplified trading operations",
+      "methods": [
+        "Buy(volume, symbol, price, sl, tp, comment)",
+        "Sell(volume, symbol, price, sl, tp, comment)",
+        "PositionOpen(symbol, type, volume, price, sl, tp, comment)",
+        "PositionClose(ticket)",
+        "PositionModify(ticket, sl, tp)"
+      ],
+      "note": "Does NOT have CalcMargin() - use AccountInfoDouble() instead"
+    },
+    "CPositionInfo": {
+      "purpose": "Get position information",
+      "methods": [
+        "SelectByIndex(index) - select position by index",
+        "SelectByTicket(ticket) - select by ticket number",
+        "Ticket(), Symbol(), Type(), Volume(), PriceOpen(), PriceCurrent(), StopLoss(), TakeProfit()"
+      ]
+    },
+    "CSymbolInfo": {
+      "purpose": "Get symbol information",
+      "methods": [
+        "Name(), Bid(), Ask(), Point(), Digits(), ContractSize()"
+      ]
+    },
+    "CAccountInfo": {
+      "purpose": "Get account information",
+      "methods": [
+        "Balance(), Equity(), FreeMargin(), Margin(), MarginLevel()"
+      ]
+    }
+  },
+  "4_trading_functions": {
+    "OrderSend": {
+      "signature": "ulong OrderSend(MqlTradeRequest &request, MqlTradeResult &result)",
+      "note": "Low-level, use CTrade instead for simplicity"
+    },
+    "PositionOpen": {
+      "signature": "bool PositionOpen(symbol, type, volume, price, sl, tp, comment)",
+      "types": "ORDER_TYPE_BUY, ORDER_TYPE_SELL",
+      "returns": "true if successful"
+    },
+    "PositionClose": {
+      "signature": "bool PositionClose(ticket)",
+      "note": "Closes position by ticket number"
+    },
+    "PositionModify": {
+      "signature": "bool PositionModify(ticket, sl, tp)",
+      "note": "Modify SL/TP of existing position"
+    }
+  },
+  "5_arrays_and_data": {
+    "static_vs_dynamic": {
+      "static": "double arr[10]; - fixed size, cannot use ArraySetAsSeries()",
+      "dynamic": "double arr[]; - variable size, can use ArraySetAsSeries()"
+    },
+    "array_operations": {
+      "ArraySetAsSeries": "Reverse array indexing (0=newest bar)",
+      "ArrayResize": "Change dynamic array size",
+      "ArrayCopy": "Copy array contents",
+      "CopyBuffer": "Copy indicator buffer to array",
+      "CopyClose": "Copy close prices to array"
+    },
+    "correct_usage": "\n// WRONG - static array\ndouble buf[3];\nArraySetAsSeries(buf, true); // ERROR!\n\n// CORRECT - dynamic array\ndouble buf[];\nArrayResize(buf, 3);\nArraySetAsSeries(buf, true); // OK\n"
+  },
+  "6_important_enums": {
+    "ENUM_ACCOUNT_INFO_DOUBLE": [
+      "ACCOUNT_BALANCE - account balance",
+      "ACCOUNT_EQUITY - current equity",
+      "ACCOUNT_MARGIN_FREE - free margin",
+      "ACCOUNT_MARGIN - used margin",
+      "ACCOUNT_MARGIN_LEVEL - margin level %"
+    ],
+    "ENUM_SYMBOL_INFO_DOUBLE": [
+      "SYMBOL_BID - current bid",
+      "SYMBOL_ASK - current ask",
+      "SYMBOL_POINT - point value",
+      "SYMBOL_TRADE_TICK_SIZE - minimum price change"
+    ],
+    "ORDER_TYPE": [
+      "ORDER_TYPE_BUY - buy market order",
+      "ORDER_TYPE_SELL - sell market order",
+      "ORDER_TYPE_BUY_LIMIT - buy limit order",
+      "ORDER_TYPE_SELL_LIMIT - sell limit order"
+    ],
+    "POSITION_TYPE": [
+      "POSITION_TYPE_BUY - long position",
+      "POSITION_TYPE_SELL - short position"
+    ]
+  },
+  "7_common_pitfalls": {
+    "pitfall_1": {
+      "issue": "Using static arrays with ArraySetAsSeries()",
+      "fix": "Use dynamic arrays: double arr[]; ArrayResize(arr, size);"
+    },
+    "pitfall_2": {
+      "issue": "Using deprecated ACCOUNT_FREEMARGIN",
+      "fix": "Use ACCOUNT_MARGIN_FREE instead"
+    },
+    "pitfall_3": {
+      "issue": "Calling trade.CalcMargin() - doesn't exist",
+      "fix": "Use AccountInfoDouble(ACCOUNT_MARGIN_FREE) to check available margin"
+    },
+    "pitfall_4": {
+      "issue": "Processing multiple times per bar",
+      "fix": "Check if new bar: if(iTime() == lastTime) return;"
+    },
+    "pitfall_5": {
+      "issue": "Not checking if position exists before closing",
+      "fix": "Use CPositionInfo to verify position exists first"
+    },
+    "pitfall_6": {
+      "issue": "Hardcoding magic numbers",
+      "fix": "Use input parameter: input ulong MagicNumber = 20260529;"
+    }
+  },
+  "8_error_handling": {
+    "check_result": "\nMqlTradeResult result;\nif(!trade.Buy(0.1, _Symbol, 0, 0, 0, \"Buy signal\")) {\n    Print(\"Buy failed: \", GetLastError());\n    return;\n}\n",
+    "common_errors": {
+      "4756": "Trade disabled",
+      "4757": "Trade context busy",
+      "4758": "Invalid price",
+      "4759": "Invalid stops",
+      "4760": "Invalid volume",
+      "4761": "Market closed",
+      "4762": "No money"
+    }
+  },
+  "9_performance_tips": {
+    "tip_1": "Only process on new bar, not every tick",
+    "tip_2": "Cache indicator handles, don't create new ones every tick",
+    "tip_3": "Use CopyBuffer() instead of iClose() in loops",
+    "tip_4": "Minimize array operations in OnTick()",
+    "tip_5": "Use static variables for persistent data"
+  }
+}
